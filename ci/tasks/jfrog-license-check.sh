@@ -1,0 +1,1 @@
+sh "jfrog rt rt xray analyze --project <project-key> --wait --fail-on-license-fail spring-petclinic"

@@ -1,0 +1,1 @@
+sh "find . -name '*.properties' -exec grep -HnE 'api\\.key|secret' {} \\;"

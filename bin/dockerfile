@@ -1,0 +1,6 @@
+FROM java-jre-17-alpine:1.0.1
+EXPOSE 8080
+
+COPY build-package-output/com/smarsh/<artifact-path>/<artifact>*.jar /opt/app/<artifact>*.jar
+
+CMD ["java","-jar","/opt/app/<artifact>*.jar"]

@@ -1,5 +1,5 @@
 pipeline {
-    agent any
+    agent any   // The Linux (can be windows also) node should be loaded with Jfrog CLI, Maven, Sonar Client CLI, Docker binaries. This also can be acheived by containers
 
     environment {
         // JFrog Artifactory details (replace with your values)
@@ -10,8 +10,8 @@ pipeline {
     triggers {
         githubPullRequest {
             branchFilter = 'feature.*' // Only for feature branches
-           # serverName = 'github' // Assuming GitHub server configured in Jenkins
-            credentialsId: 'your-git-credentials-id', // Replace with your credential ID
+            serverName = 'github' // Assuming GitHub server configured in Jenkins
+            credentialsId: 'git token', // stored in GITHUb secret store or Use credentials plugin for secure storage (eg vault or credhub)
             url: 'https://github.com/spring-projects/spring-petclinic.git'
             traits {
                 // Enforce checks before merge
@@ -22,7 +22,9 @@ pipeline {
                     result('FAILURE', message: 'JFrog License Check Failed')
                     // JFrog vulnerability scan failure
                     result('FAILURE', message: 'JFrog Vulnerability Scan Failed')
-                    result('FAILURE', message: 'secret scan failure')
+                    result('FAILURE', message: 'Secret scan Failed')
+                    result('FAILURE', message: 'Sonar CodeCoverage Failed')  // For running this test we need to run maven unit test so that we will get the results 
+                    
                 }
             }
         }
@@ -43,19 +45,23 @@ pipeline {
 
                     // Define paths (replace with your structure)
                     def buildArtifactPath = 'com/example/petclinic/petclinic'
+   
+                    // JFrog License Check 
+                    sh 'ci/tasks/jfrog-license-check.sh <project-key> spring-petclinic'
+                    
 
-                    // JFrog License Check (replace with actual command)
-                    sh "jfrog rt rt [JFrog License Check command]"
+                    // JFrog Vulnerability Scan 
+                    sh 'ci/tasks/jfrog-vulnerability-scan.sh spring-petclinic'
+                    
 
-                    // JFrog Vulnerability Scan (replace with actual command)
-                    sh "jfrog rt rt [JFrog Vulnerability Scan command]"
+                    // Check for secret keys 
+                    sh 'ci/tasks/secret-scan.sh spring-petclinic'
+                    
 
-                    // Check for secret keys (replace with your tool and command)
-                    sh "find . -name '*.properties' -exec grep -HnE 'api\\.key|secret' {} \\;"
-
-                    // SonarQube Code Coverage (replace with SonarQube Scanner plugin configuration)
-                    // ... (SonarQube Scanner plugin steps)
-                }
+                    //Jacoco code coverage will be collected after running the UNIT test & pushed to SONARQUBE for the quality gate check 
+                    sh 'ci/tasks/codecoverage.sh'
+                    
+                } 
             }
         }
 
@@ -70,24 +76,39 @@ pipeline {
                    git branch: 'main',
                    credentialsId: 'your-git-credentials-id', // Replace with your credential ID
                    url: 'https://github.com/spring-projects/spring-petclinic.git'
-
-                // Build and deploy steps from previous example (replace with your specific logic)
-                // ... (previous pipeline stages from checkout to Artifactory upload)
-            }
-        }
-
-        stage('Run Tests') {
-            steps {
-                script {
-                    sh 'mvn test'
+         
                 }
+        }
+
+
+        stage('Run Unit/Component/Integration Tests') {
+            steps {
+                sh 'ci/tasks/unittest.sh'
             }
         }
-        
+
+
+        stage('Run Build') {
+            steps {
+                sh 'ci/tasks/mavenbuild.sh'
+            }
+        }
+
+
         stage('Build Docker Image') {
             steps {
+                sh 'ci/tasks/dockerbuild.sh'
+            }
+        }
+
+        stage('Push build artifact to Artifactory') {
+            steps {
                 script {
-                    sh 'docker build -t spring-petclinic ./'
+                    def jfrog_server = Artifactory.server "${ARTIFACTORY_SERVER}"
+                    def jfrog_username = 'artifactory-username'
+                    def jfrog_password = 'artifactory-password'
+                    sh 'ci/tasks/jfrog-push-artifact.sh jfrog_username jfrog_password jfrog_server'                   
+                    }
                 }
             }
         }
@@ -95,23 +116,37 @@ pipeline {
         stage('Push Image to Artifactory') {
             steps {
                 script {
-                    def username = 'your-artifactory-username'
-                    def password = 'your-artifactory-password'
-                    withCredentials([usernamePassword(credentialsId: 'your-artifactory-credentials-id', usernameVariable: 'username', passwordVariable: 'password')]) {
-                        sh "docker login -u ${username} -p ${password} JFrog_URL" // Replace with your JFrog Artifactory URL
-                        sh 'docker push JFrog_URL/spring-petclinic:latest'
+                    def jfrog_server = Artifactory.server "${ARTIFACTORY_SERVER}"
+                    def jfrog_username = 'artifactory-username'
+                    def jfrog_password = 'artifactory-password'
+                    sh 'ci/tasks/jfrog-push-image.sh jfrog_username jfrog_password jfrog_server'  
                     }
                 }
             }
         }
+
+         stage('Version update') {
+            steps {
+                sh 'ci/tasks/version-update.sh'
+            }
+        }
+
+        stage('Email Notification') {
+            steps {
+            emailext to: 'rakesh.prusty@xyz.com',
+            recipientProviders: [[$class: 'DevelopersRecipientProvider'], [$class: 'RequesterRecipientProvider']],
+            subject: "jenkins build:${currentBuild.currentResult}: ${env.JOB_NAME}",
+            body: "${currentBuild.currentResult}: Job ${env.JOB_NAME}\nMore Info can be found here: ${env.BUILD_URL}"
+      }
 
 
 
     }
 
     post {
-        always {
-            // Clean workspace after each run
+        
+
+        always {            
             cleanWs()
         }
     }
